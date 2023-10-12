@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/url"
+	"os"
 	"time"
 
 	"database/sql/driver"
@@ -168,7 +168,7 @@ func(card *Card) UnmarshalJSON(data []byte) error {
 }
 
 func main() {
-	content, err := ioutil.ReadFile("./default-cards-20231007210701.json")
+	content, err := os.ReadFile("./default-cards-20231007210701.json")
 	if err != nil {
 		log.Fatal("Error when opening file: ", err)
 	}
@@ -191,7 +191,7 @@ func main() {
 		defaultSet[jsonCard.ID.String()] = true
 	}
 
-	content, err = ioutil.ReadFile("./all-cards-20231007212054.json")
+	content, err = os.ReadFile("./all-cards-20231007212054.json")
 	if err != nil {
 		log.Fatal("Error when opening file: ", err)
 	}
@@ -206,15 +206,10 @@ func main() {
 	elapsed = end.Sub(start)
 	fmt.Printf("Unmarshal all: %s\n", elapsed)
 
-	start = time.Now()
 	for _, card := range cards {
 		_, isDefault := defaultSet[card.ID.String()]
 		card.DefaultLang = isDefault
 	}
-	end = time.Now()
-	elapsed = end.Sub(start)
-	fmt.Printf("Convert all: %s\n", elapsed)
-
 
 	var dsn = "host=localhost user=postgres password=password dbname=postgres port=55432 TimeZone=America/Chicago"
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
