@@ -56,11 +56,19 @@ type JSONCard struct {
 	ImageURIs ImageURIs `json:"image_uris"`
 	Faces []Face `json:"card_faces"`
 	SetID uuid.UUID `json:"set_id"`
+	Finishes []string `json:"finishes"`
 	SetName string `json:"set_name"`
 	SetType string `json:"set_type"`
 	SetCode string `json:"set"` // The (usually) 3 letter code
 	CollectorNumber string `json:"collector_number"`
+	Layout string `json:"layout"`
 	Foil bool `json:"foil"`
+}
+
+type Finish struct {
+	gorm.Model
+	Name string
+	CardID uuid.UUID
 }
 
 type Card struct {
@@ -70,9 +78,11 @@ type Card struct {
 	URI JSONURL `gorm:"embedded"`
 	ImageURIs ImageURIs `gorm:"embedded"`
 	Faces []Face
+	Finishes []Finish
 	DefaultLang bool
 	SetID uuid.UUID
 	Set Set
+	Layout string
 	CollectorNumber string
 	Foil bool
 }
@@ -103,7 +113,7 @@ func (j *JSONURL) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	
+
 	j.URL = *url
 	return nil
 }
@@ -122,29 +132,39 @@ func (j JSONURL) Value() (driver.Value, error) {
 	return j.URL.String(), nil
 }
 
-func (jsonCard JSONCard) ConvertToCard(isDefault bool) Card {
-	return Card{
-		ID: jsonCard.ID,
-		Name: jsonCard.Name,
-		URI: jsonCard.URI,
-		CollectorNumber: jsonCard.CollectorNumber,
-		Faces: jsonCard.Faces,
-		Foil: jsonCard.Foil,
-		ImageURIs: ImageURIs{
-			Small: jsonCard.ImageURIs.Small,
-			Normal: jsonCard.ImageURIs.Normal,
-			Large: jsonCard.ImageURIs.Large,
-			PNG: jsonCard.ImageURIs.PNG,
-			ArtCrop: jsonCard.ImageURIs.ArtCrop,
-			BorderCrop: jsonCard.ImageURIs.BorderCrop,
-		},
-		Set: Set{
-			ID: jsonCard.SetID,
-			Name: jsonCard.SetName,
-			Type: jsonCard.SetType,
-			Code: jsonCard.SetCode,
-		},
+func(card *Card) UnmarshalJSON(data []byte) error {
+	var jsonCard JSONCard
+	json.Unmarshal(data, &jsonCard)
+
+	var finishes []Finish
+	for _, finish := range jsonCard.Finishes {
+		finishes = append(finishes, Finish{Name: finish})
 	}
+
+	card.ID = jsonCard.ID
+	card.Name = jsonCard.Name
+	card.URI = jsonCard.URI
+	card.CollectorNumber = jsonCard.CollectorNumber
+	card.Faces = jsonCard.Faces
+	card.Layout = jsonCard.Layout
+	card.Foil = jsonCard.Foil
+	card.Finishes = finishes
+	card.ImageURIs = ImageURIs{
+		Small: jsonCard.ImageURIs.Small,
+		Normal: jsonCard.ImageURIs.Normal,
+		Large: jsonCard.ImageURIs.Large,
+		PNG: jsonCard.ImageURIs.PNG,
+		ArtCrop: jsonCard.ImageURIs.ArtCrop,
+		BorderCrop: jsonCard.ImageURIs.BorderCrop,
+	}
+	card.Set = Set{
+		ID: jsonCard.SetID,
+		Name: jsonCard.SetName,
+		Type: jsonCard.SetType,
+		Code: jsonCard.SetCode,
+	}
+
+	return nil
 }
 
 func main() {
@@ -154,8 +174,8 @@ func main() {
 	}
 
 	start := time.Now()
-	var defaultJsonCards []DefaultCard
-	err = json.Unmarshal(content, &defaultJsonCards)
+	var defaultCards []DefaultCard
+	err = json.Unmarshal(content, &defaultCards)
 	if err != nil {
 			log.Fatal("Error during Unmarshal(): ", err)
 	}
@@ -167,7 +187,7 @@ func main() {
 	// for whether an ID exists in the defaultSet or not
 	defaultSet := make(map[string]bool)
 
-	for _, jsonCard := range defaultJsonCards {
+	for _, jsonCard := range defaultCards {
 		defaultSet[jsonCard.ID.String()] = true
 	}
 
@@ -177,8 +197,8 @@ func main() {
 	}
 
 	start = time.Now()
-	var allJsonCards []JSONCard
-	err = json.Unmarshal(content, &allJsonCards)
+	var cards []Card
+	err = json.Unmarshal(content, &cards)
 	if err != nil {
 			log.Fatal("Error during Unmarshal(): ", err)
 	}
@@ -186,13 +206,10 @@ func main() {
 	elapsed = end.Sub(start)
 	fmt.Printf("Unmarshal all: %s\n", elapsed)
 
-
 	start = time.Now()
-	var cards []Card
-	for _, jsonCard := range allJsonCards {
-		_, isDefault := defaultSet[jsonCard.ID.String()]
-		card := jsonCard.ConvertToCard(isDefault)
-		cards = append(cards, card)
+	for _, card := range cards {
+		_, isDefault := defaultSet[card.ID.String()]
+		card.DefaultLang = isDefault
 	}
 	end = time.Now()
 	elapsed = end.Sub(start)
@@ -205,12 +222,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	db.AutoMigrate(&Card{}, &Set{}, &Face{})
+	db.AutoMigrate(&Card{}, &Set{}, &Face{}, &Finish{})
 
 	start = time.Now()
 
-	db.Unscoped().Where("1 = 1").Delete(&Face{}).Delete(&Card{})
-	//db.Session(&gorm.Session{AllowGlobalUpdate:true}).Delete(&Card{})
+	db.Unscoped().Where("1 = 1").Delete(&Finish{}).Delete(&Face{}).Delete(&Card{})
 
 	result := db.Clauses(clause.OnConflict{
 		UpdateAll: true,
