@@ -20,16 +20,26 @@ const (
 var dsn = "host=localhost user=postgres password=password dbname=postgres port=55432 TimeZone=America/Chicago"
 var db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 
+func GetOffset(c *gin.Context) int {
+	page, err := strconv.Atoi(c.Query("page"))
+	if err != nil || page < 0 {
+		page = 0
+	}
+	offset := page * pageSize
+
+	return offset
+}
+
 func Paginate(c *gin.Context) func(db *gorm.DB) *gorm.DB {
 	return func (db *gorm.DB) *gorm.DB {
-		page, err := strconv.Atoi(c.Query("page"))
-		if err != nil || page < 0 {
-			page = 0
-		}
-		offset := page * pageSize
-
+		offset := GetOffset(c)
 		return db.Offset(offset).Limit(pageSize)
 	}
+}
+
+type PagedSearchResult struct {
+	HasMore bool `json:"has_more"`
+	Cards []models.Card `json:"results"`
 }
 
 func setupRouter() *gin.Engine {
@@ -43,6 +53,7 @@ func setupRouter() *gin.Engine {
 		// so even without a parameter we will search for everything
 		nameContains := fmt.Sprintf("%%%s%%", c.Query("nameContains"))
 
+		var count int64
 		var cards []models.Card
 		result := db.Model(&models.Card{}).
 		             Preload("Set").
@@ -50,13 +61,19 @@ func setupRouter() *gin.Engine {
 		             Preload("Faces").
 		             Where("name ILIKE ?", nameContains).
 		             Order("name, id").
+		             Count(&count).
 		             Scopes(Paginate(c)).
 		             Find(&cards)
 
 		if result.Error != nil {
 			log.Fatal(result.Error)
 		}
-		c.JSON(http.StatusOK, cards)
+
+		pagedSearchResult := PagedSearchResult{
+			HasMore: count - (int64(GetOffset(c)) + pageSize) > 0,
+			Cards: cards,
+		}
+		c.JSON(http.StatusOK, pagedSearchResult)
 	})
 
 	return r
