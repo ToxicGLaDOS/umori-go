@@ -3,9 +3,10 @@ package models
 import (
 	"encoding/json"
 
-	"gorm.io/gorm"
 	"github.com/google/uuid"
+	"github.com/toxicglados/umori-go/pkg/crypto"
 	"github.com/toxicglados/umori-go/pkg/jsonurl"
+	"gorm.io/gorm"
 )
 
 type Face struct {
@@ -54,6 +55,17 @@ type ImageURIs struct {
 	BorderCrop jsonurl.JSONURL `json:"border_crop"`
 }
 
+type User struct {
+	gorm.Model
+	Username string `gorm:"unique"`
+	PasswordHash string
+}
+
+type UnsafeUser struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type ScryfallCard struct {
 	ID uuid.UUID `json:"id"`
 	Name string `json:"name"`
@@ -67,6 +79,24 @@ type ScryfallCard struct {
 	SetCode string `json:"set"` // The (usually) 3 letter code
 	CollectorNumber string `json:"collector_number"`
 	Layout string `json:"layout"`
+}
+
+func(user *User) UnmarshalJSON(data []byte) error {
+	var unsafeUser UnsafeUser
+	err := json.Unmarshal(data, &unsafeUser)
+	if err != nil {
+		return err
+	}
+
+	user.Username = unsafeUser.Username
+	passwordHash, err := crypto.GenerateFromPassword(unsafeUser.Password, crypto.DefaultHashingParams())
+	if err != nil {
+		return err
+	}
+
+	user.PasswordHash = passwordHash
+
+	return nil
 }
 
 func(finishes Finishes) MarshalJSON() ([]byte, error) {
