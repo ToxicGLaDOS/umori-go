@@ -39,7 +39,7 @@ type Card struct {
 
 type Set struct {
 	gorm.Model `json:"-"`
-	ID uuid.UUID `gorm:"type:uuid;primary_key"`
+	ID uuid.UUID `json:"id" gorm:"type:uuid;primary_key"`
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Code string `json:"code" gorm:"unique"` // The (usually) 3 letter code
