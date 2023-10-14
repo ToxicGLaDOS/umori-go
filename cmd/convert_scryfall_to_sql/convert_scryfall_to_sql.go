@@ -42,7 +42,9 @@ type DefaultCard struct {
 }
 
 func main() {
-	content, err := os.ReadFile("./default-cards-20231007210701.json")
+	defaultDataPath := os.Args[1]
+	allDataPath := os.Args[2]
+	content, err := os.ReadFile(defaultDataPath)
 	if err != nil {
 		log.Fatal("Error when opening file: ", err)
 	}
@@ -51,7 +53,7 @@ func main() {
 	var defaultCards []DefaultCard
 	err = json.Unmarshal(content, &defaultCards)
 	if err != nil {
-			log.Fatal("Error during Unmarshal(): ", err)
+		log.Fatal("Error during Unmarshal(): ", err)
 	}
 	end := time.Now()
 	elapsed := end.Sub(start)
@@ -65,7 +67,7 @@ func main() {
 		defaultSet[jsonCard.ID.String()] = true
 	}
 
-	content, err = os.ReadFile("./all-cards-20231007212054.json")
+	content, err = os.ReadFile(allDataPath)
 	if err != nil {
 		log.Fatal("Error when opening file: ", err)
 	}

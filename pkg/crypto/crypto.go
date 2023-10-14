@@ -10,6 +10,8 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
+// Thanks to https://www.alexedwards.net/blog/how-to-hash-and-verify-passwords-with-argon2-in-go
+// for this code
 type HashingParams struct {
     memory      uint32
     iterations  uint32

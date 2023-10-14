@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"errors"
 
-	//"github.com/google/uuid"
 	"github.com/toxicglados/umori-go/pkg/crypto"
 	"github.com/toxicglados/umori-go/pkg/models"
 
@@ -16,8 +16,6 @@ import (
 	"github.com/shaj13/go-guardian/v2/auth"
 	"github.com/shaj13/go-guardian/v2/auth/strategies/jwt"
 	"github.com/shaj13/go-guardian/v2/auth/strategies/basic"
-	//"github.com/shaj13/go-guardian/v2/auth/strategies/token"
-	"github.com/shaj13/go-guardian/v2/auth/strategies/union"
 	"github.com/shaj13/libcache"
 	_ "github.com/shaj13/libcache/fifo"
 	"gorm.io/driver/postgres"
@@ -53,10 +51,14 @@ type PagedSearchResult struct {
 	Cards []models.Card `json:"results"`
 }
 
+type ErrorResponse struct {
+	Message string `json:"message"`
+}
+
 var (
-	strategy union.Union
+	jwtStrategy auth.Strategy
+	basicStrategy auth.Strategy
 	keeper jwt.SecretsKeeper
-	tokenStrategy auth.Strategy
 	cacheObj libcache.Cache
 )
 
@@ -65,10 +67,16 @@ func setupRouter() *gin.Engine {
 	// gin.DisableConsoleColor()
 	r := gin.Default()
 
-	authorized := r.Group("/api")
-	authorized.Use(AuthRequired())
+	basicAuthorized := r.Group("/api")
+	basicAuthorized.Use(BasicAuthRequired())
 	{
-		authorized.GET("/test", test)
+		basicAuthorized.GET("/token", tokenEndpoint)
+	}
+
+	tokenAuthorized := r.Group("/api")
+	tokenAuthorized.Use(TokenAuthRequired())
+	{
+		// Token auth functions go here
 	}
 
 	r.GET("/api/cards/search", func(c *gin.Context) {
@@ -113,43 +121,13 @@ func setupRouter() *gin.Engine {
 		c.JSON(http.StatusOK, struct{}{})
 	})
 
-	r.POST("/api/login", login)
-
-
 	return r
 }
 
-func test(c *gin.Context) {
+func tokenEndpoint(c *gin.Context) {
 	token := createToken(c.Request)
 
 	c.JSON(http.StatusOK, struct{Token string}{Token: token})
-}
-
-func login(c *gin.Context) {
-	var user models.UnsafeUser
-
-	err := c.BindJSON(&user)
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-
-	var dbUser models.User
-	result := db.Select("PasswordHash").Where("username = ?", user.Username).First(&dbUser)
-
-	if result.Error != nil {
-		log.Fatal(result.Error)
-	}
-
-
-	match, err := crypto.ComparePasswordAndHash(user.Password, dbUser.PasswordHash)
-
-	if !match {
-		c.JSON(http.StatusOK, struct{Message string}{Message: "Password didn't match"})
-		return
-	}
-	
-	c.JSON(http.StatusOK, struct{Message string}{Message: "Password matched"})
 }
 
 func setupGoGuardian() {
@@ -160,9 +138,8 @@ func setupGoGuardian() {
 	}
 	cacheObj = libcache.FIFO.New(0)
 	cacheObj.SetTTL(time.Minute * 1)
-	basicStrategy := basic.NewCached(validateUser, cacheObj)
-	jwtStrategy := jwt.New(cacheObj, keeper)
-	strategy = union.New(jwtStrategy, basicStrategy)
+	basicStrategy = basic.NewCached(validateUser, cacheObj)
+	jwtStrategy = jwt.New(cacheObj, keeper)
 }
 
 func createToken(r *http.Request) string {
@@ -172,6 +149,7 @@ func createToken(r *http.Request) string {
 	return token
 }
 
+// Only called if user isn't found in cacheObj
 func validateUser(ctx context.Context, r *http.Request, userName, password string) (auth.Info, error) {
 	var dbUser models.User
 	result := db.Select("PasswordHash").Where("username = ?", userName).First(&dbUser)
@@ -189,18 +167,57 @@ func validateUser(ctx context.Context, r *http.Request, userName, password strin
 		return auth.NewDefaultUser(userName, "1", nil, nil), nil
 	}
 
-	return nil, fmt.Errorf("Invalid credentials")
+	// This is a little weird because validateUser doesn't have
+	// anything to do with basic auth necessarily, but that's all
+	// we use to call this function.
+	// This makes it so the errors are the same whether the
+	// user was found in cache or not
+	return nil, basic.ErrInvalidCredentials
 }
 
-func AuthRequired() gin.HandlerFunc{
+func BasicAuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		_, user, err := strategy.AuthenticateRequest(c.Request)
+		user, err := basicStrategy.Authenticate(c.Request.Context(), c.Request)
 		if err != nil {
-			fmt.Println(err)
-			c.JSON(http.StatusUnauthorized, struct{}{})
+			fmt.Printf("got error when authenticating: %s\n", err.Error())
+			if errors.Is(err, basic.ErrMissingPrams) {
+				errorResponse := ErrorResponse{
+					Message: "Request missing BasicAuth",
+				}
+				c.AbortWithStatusJSON(http.StatusUnauthorized, errorResponse)
+			} else if errors.Is(err, basic.ErrInvalidCredentials) {
+				errorResponse := ErrorResponse{
+					Message: "Invalid credentials",
+				}
+				c.AbortWithStatusJSON(http.StatusUnauthorized, errorResponse)
+			} else {
+				errorResponse := ErrorResponse{
+					Message: err.Error(),
+				}
+				c.AbortWithStatusJSON(http.StatusUnauthorized, errorResponse)
+			}
+
 			return
 		}
-		log.Printf("User %s Authenticated\n", user.GetUserName())
+
+		// This is critical because we pull the user out in
+		// createToken
+		c.Request = auth.RequestWithUser(user, c.Request)
+		c.Next()
+	}
+}
+
+func TokenAuthRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, err := jwtStrategy.Authenticate(c.Request.Context(), c.Request)
+		if err != nil {
+			fmt.Printf("got error when authenticating: %s\n", err)
+			errorResponse := ErrorResponse{
+				Message: err.Error(),
+			}
+			c.AbortWithStatusJSON(http.StatusUnauthorized, errorResponse)
+			return
+		}
 
 		// This is critical because we pull the user out in
 		// createToken
@@ -212,9 +229,9 @@ func AuthRequired() gin.HandlerFunc{
 func main() {
 	db.AutoMigrate(&models.Card{},
 	               &models.Set{},
-								 &models.Face{},
-								 &models.Finish{},
-							   &models.User{})
+	               &models.Face{},
+	               &models.Finish{},
+	               &models.User{})
 
 	setupGoGuardian()
 
