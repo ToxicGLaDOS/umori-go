@@ -2,24 +2,26 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
-	"errors"
 
+	"github.com/google/uuid"
 	"github.com/toxicglados/umori-go/pkg/crypto"
 	"github.com/toxicglados/umori-go/pkg/models"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shaj13/go-guardian/v2/auth"
-	"github.com/shaj13/go-guardian/v2/auth/strategies/jwt"
 	"github.com/shaj13/go-guardian/v2/auth/strategies/basic"
+	"github.com/shaj13/go-guardian/v2/auth/strategies/jwt"
 	"github.com/shaj13/libcache"
 	_ "github.com/shaj13/libcache/fifo"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -76,6 +78,7 @@ func setupRouter() *gin.Engine {
 	tokenAuthorized := r.Group("/api")
 	tokenAuthorized.Use(TokenAuthRequired())
 	{
+		tokenAuthorized.POST("/collection", collectionEndpoint)
 		// Token auth functions go here
 	}
 
@@ -124,6 +127,56 @@ func setupRouter() *gin.Engine {
 	return r
 }
 
+type CollectionRequest struct {
+	Username string `json:"username"`
+	CardID uuid.UUID `json:"card_id"`
+	Quantity int `json:"quantity"`
+}
+
+func collectionEndpoint(c *gin.Context) {
+	u := auth.User(c.Request)
+	var collectionRequest CollectionRequest
+	err := c.BindJSON(&collectionRequest)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	if u.GetUserName() != collectionRequest.Username {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "Unauthorized"})
+		return
+	}
+
+	var dbUser models.User
+	db.Model(&models.User{}).Select("id").Where("username = ?", u.GetUserName()).First(&dbUser)
+
+	collectionEntry := models.CollectionEntry {
+		UserID: dbUser.ID,
+		CardID: collectionRequest.CardID,
+		Quantity: collectionRequest.Quantity,
+	}
+
+	// This is kind of complicated so here's the explanation
+	// We create the collectionEntry, but on a conflict we
+	// add the quantity of the existing column to the quantity
+	// we were given. This gets wrapped in GREATEST(x, 0)
+	// so it doesn't go below 0 clause.Returning{} ensures that we
+	// put the value after resolving the conflict into &collectionEntry
+	result := db.Clauses(
+		clause.OnConflict{
+			Columns: []clause.Column{{Name: "user_id"}, {Name: "card_id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"quantity": gorm.Expr("GREATEST(collection_entries.quantity + ?, 0)", collectionEntry.Quantity)})},
+		clause.Returning{},
+	).Create(&collectionEntry)
+	if result.Error != nil {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "Error creating db entry"})
+		return
+	}
+
+	c.JSON(http.StatusOK, collectionEntry)
+}
+
 func tokenEndpoint(c *gin.Context) {
 	token := createToken(c.Request)
 
@@ -164,7 +217,11 @@ func validateUser(ctx context.Context, r *http.Request, userName, password strin
 	}
 
 	if match {
-		return auth.NewDefaultUser(userName, "1", nil, nil), nil
+		// I honestly don't know what the second parameter
+		// "id" does here. Keeping it as a literal "1" didn't
+		// seem to matter, but we set it to the userID just to
+		// ensure it's different per user in case that matters
+		return auth.NewDefaultUser(userName, strconv.FormatUint(uint64(dbUser.ID), 10), nil, nil), nil
 	}
 
 	// This is a little weird because validateUser doesn't have
@@ -231,7 +288,8 @@ func main() {
 	               &models.Set{},
 	               &models.Face{},
 	               &models.Finish{},
-	               &models.User{})
+	               &models.User{},
+	               &models.CollectionEntry{})
 
 	setupGoGuardian()
 
