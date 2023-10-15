@@ -3,6 +3,7 @@ module github.com/toxicglados/umori-go
 go 1.21.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/google/uuid v1.3.1
 	github.com/shaj13/go-guardian/v2 v2.11.5

@@ -2,11 +2,17 @@ package models
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/toxicglados/umori-go/pkg/crypto"
 	"github.com/toxicglados/umori-go/pkg/jsonurl"
 	"gorm.io/gorm"
+)
+
+var (
+	ErrMissingUsername error = errors.New("Username missing")
+	ErrMissingPassword error = errors.New("Password missing")
 )
 
 type Face struct {
@@ -57,14 +63,14 @@ type ImageURIs struct {
 
 type User struct {
 	gorm.Model
-	Username string `gorm:"unique"`
-	PasswordHash string
+	Username string `gorm:"unique" binding:"required"`
+	PasswordHash string `binding:"required"`
 	Collection []CollectionEntry
 }
 
 type UnsafeUser struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username *string `json:"username"`
+	Password *string `json:"password"`
 }
 
 type ScryfallCard struct {
@@ -96,8 +102,16 @@ func(user *User) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	user.Username = unsafeUser.Username
-	passwordHash, err := crypto.GenerateFromPassword(unsafeUser.Password, crypto.DefaultHashingParams())
+	if unsafeUser.Username == nil {
+		return ErrMissingUsername
+	}
+	if unsafeUser.Password == nil {
+		return ErrMissingPassword
+	}
+
+	user.Username = *unsafeUser.Username
+
+	passwordHash, err := crypto.GenerateFromPassword(*unsafeUser.Password, crypto.DefaultHashingParams())
 	if err != nil {
 		return err
 	}

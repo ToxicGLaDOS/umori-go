@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -28,9 +30,16 @@ const (
 	pageSize = 25
 )
 
-var dsn = "host=localhost user=postgres password=password dbname=postgres port=55432 TimeZone=America/Chicago"
-var db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+var (
+	db *gorm.DB
+	dsn = "host=localhost user=postgres password=password dbname=postgres port=55432 TimeZone=America/Chicago"
+	ErrUnexpectedEOF error = errors.New("Unexpected EOF")
+	ErrUserAlreadyExists error = errors.New("That username already exists")
+	ErrUnknown error = errors.New("Unknown error")
+	ErrCreatingToken error = errors.New("Error creating token")
+	ErrInvalidJSON error = errors.New("Invalid JSON body")
 
+)
 func GetOffset(c *gin.Context) int {
 	page, err := strconv.Atoi(c.Query("page"))
 	if err != nil || page < 0 {
@@ -129,14 +138,37 @@ func setupRouter() *gin.Engine {
 
 	r.POST("/api/register", func(c *gin.Context) {
 		var user models.User
-
+	
 		err := c.BindJSON(&user)
 		if err != nil {
-			log.Fatal(err)
+			if errors.Is(err, io.EOF) {
+				c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrUnexpectedEOF.Error()})
+			} else {
+				var unmarshalTypeError *json.UnmarshalTypeError
+				var syntaxError *json.SyntaxError
+				if errors.As(err, &unmarshalTypeError) {
+					c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrInvalidJSON.Error()})
+				} else if errors.Is(err, models.ErrMissingPassword) || errors.Is(err, models.ErrMissingUsername) || errors.As(err, &syntaxError) {	
+					c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+				} else {
+					c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrUnknown.Error()})
+				}
+			}
 			return
 		}
 
-		db.Create(&user)
+		err = db.Create(&user).Error
+
+		if err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrUserAlreadyExists.Error()})
+			} else {
+				// I'm not sure what could cause this
+				log.Printf("Got unexpected error during user creation: \"%s\"\n", err.Error())
+				c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrUnknown.Error()})
+			}
+			return
+		}
 
 		c.JSON(http.StatusOK, struct{}{})
 	})
@@ -211,7 +243,12 @@ func collectionPostEndpoint(c *gin.Context) {
 }
 
 func tokenEndpoint(c *gin.Context) {
-	token := createToken(c.Request)
+	token, err := createToken(c.Request)
+	if err != nil {
+		log.Printf("Error creating token: \"%s\"\n", err)
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrCreatingToken.Error()})
+		return
+	}
 
 	c.JSON(http.StatusOK, struct{Token string}{Token: token})
 }
@@ -228,11 +265,10 @@ func setupGoGuardian() {
 	jwtStrategy = jwt.New(cacheObj, keeper)
 }
 
-func createToken(r *http.Request) string {
+func createToken(r *http.Request) (string, error) {
 	u := auth.User(r)
-	token, _ := jwt.IssueAccessToken(u, keeper)
-	log.Println(u.GetUserName())
-	return token
+	token, err := jwt.IssueAccessToken(u, keeper)
+	return token, err
 }
 
 // Only called if user isn't found in cacheObj
@@ -324,7 +360,13 @@ func TokenAuthRequired() gin.HandlerFunc {
 }
 
 func main() {
-	err := db.AutoMigrate(&models.Card{},
+	var err error
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{TranslateError: true})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = db.AutoMigrate(&models.Card{},
 	                      &models.Set{},
 	                      &models.Face{},
 	                      &models.Finish{},
