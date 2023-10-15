@@ -91,6 +91,7 @@ func setupRouter() *gin.Engine {
 	tokenAuthorized.Use(TokenAuthRequired())
 	{
 		tokenAuthorized.POST("/:user/collection/:action", collectionPostEndpoint)
+		tokenAuthorized.GET("/:user/collection/cards/:id", collectionGetCardsByID)
 		// Token auth functions go here
 	}
 
@@ -181,19 +182,25 @@ func updateCollection(c *gin.Context) {
 	c.JSON(http.StatusOK, collectionEntry)
 }
 
-func collectionPostEndpoint(c *gin.Context) {
-	authenticatedUser := auth.User(c.Request)
+func collectionGetCardsByID(c *gin.Context) {
+	id := c.Param("id")
 	username := c.Param("user")
+
+	var collectionEntries []models.CollectionEntry
+	err := db.Model(&models.CollectionEntry{}).
+	          Joins("left join users on users.id = collection_entries.user_id").
+	          Where("username = ?", username).
+	          Where("card_id = ?", id).
+	          Find(&collectionEntries).
+	          Error
 	if err != nil {
 		log.Fatal(err)
-		return
 	}
 
-	if authenticatedUser.GetUserName() != username {
-		c.JSON(http.StatusUnauthorized, unauthorizedResponse)
-		return
-	}
+	c.JSON(http.StatusOK, collectionEntries)
+}
 
+func collectionPostEndpoint(c *gin.Context) {
 	action := c.Param("action")
 	if action == "update" {
 		updateCollection(c)
@@ -302,6 +309,13 @@ func TokenAuthRequired() gin.HandlerFunc {
 			return
 		}
 
+		username := c.Param("user")
+
+		if user.GetUserName() != username {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedResponse)
+			return
+		}
+
 		// This is critical because we pull the user out in
 		// createToken
 		c.Request = auth.RequestWithUser(user, c.Request)
@@ -310,12 +324,15 @@ func TokenAuthRequired() gin.HandlerFunc {
 }
 
 func main() {
-	db.AutoMigrate(&models.Card{},
-	               &models.Set{},
-	               &models.Face{},
-	               &models.Finish{},
-	               &models.User{},
-	               &models.CollectionEntry{})
+	err := db.AutoMigrate(&models.Card{},
+	                      &models.Set{},
+	                      &models.Face{},
+	                      &models.Finish{},
+	                      &models.User{},
+	                      &models.CollectionEntry{})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	setupGoGuardian()
 

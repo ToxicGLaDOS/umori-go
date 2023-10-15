@@ -59,6 +59,7 @@ type User struct {
 	gorm.Model
 	Username string `gorm:"unique"`
 	PasswordHash string
+	Collection []CollectionEntry
 }
 
 type UnsafeUser struct {
