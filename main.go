@@ -44,13 +44,24 @@ func GetOffset(c *gin.Context) int {
 func Paginate(c *gin.Context) func(db *gorm.DB) *gorm.DB {
 	return func (db *gorm.DB) *gorm.DB {
 		offset := GetOffset(c)
+		c.Set("offset", int64(offset))
 		return db.Offset(offset).Limit(pageSize)
 	}
 }
 
-type PagedSearchResult struct {
-	HasMore bool `json:"has_more"`
+type SearchResult struct {
+	PagedResult
 	Cards []models.Card `json:"results"`
+}
+
+type PagedResult struct {
+	HasMore bool `json:"has_more"`
+}
+
+func NewPagedResult(count, offset int64) PagedResult {
+	return PagedResult {
+		HasMore: count - (offset + pageSize) > 0,
+	}
 }
 
 type ErrorResponse struct {
@@ -62,6 +73,7 @@ var (
 	basicStrategy auth.Strategy
 	keeper jwt.SecretsKeeper
 	cacheObj libcache.Cache
+	unauthorizedResponse ErrorResponse = ErrorResponse{Message: "Unauthorized"}
 )
 
 func setupRouter() *gin.Engine {
@@ -78,7 +90,7 @@ func setupRouter() *gin.Engine {
 	tokenAuthorized := r.Group("/api")
 	tokenAuthorized.Use(TokenAuthRequired())
 	{
-		tokenAuthorized.POST("/collection", collectionEndpoint)
+		tokenAuthorized.POST("/:user/collection/:action", collectionPostEndpoint)
 		// Token auth functions go here
 	}
 
@@ -102,9 +114,13 @@ func setupRouter() *gin.Engine {
 		if result.Error != nil {
 			log.Fatal(result.Error)
 		}
+		offset, exists := c.Get("offset")
+		if !exists {
+			log.Fatal(errors.New("Couldn't find offset in context"))
+		}
 
-		pagedSearchResult := PagedSearchResult{
-			HasMore: count - (int64(GetOffset(c)) + pageSize) > 0,
+		pagedSearchResult := SearchResult{
+			PagedResult: NewPagedResult(count, offset.(int64)),
 			Cards: cards,
 		}
 		c.JSON(http.StatusOK, pagedSearchResult)
@@ -127,33 +143,21 @@ func setupRouter() *gin.Engine {
 	return r
 }
 
-type CollectionRequest struct {
-	Username string `json:"username"`
+type UpdateRequest struct {
 	CardID uuid.UUID `json:"card_id"`
 	Quantity int `json:"quantity"`
 }
 
-func collectionEndpoint(c *gin.Context) {
-	u := auth.User(c.Request)
-	var collectionRequest CollectionRequest
-	err := c.BindJSON(&collectionRequest)
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-
-	if u.GetUserName() != collectionRequest.Username {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "Unauthorized"})
-		return
-	}
-
+func updateCollection(c *gin.Context) {
 	var dbUser models.User
-	db.Model(&models.User{}).Select("id").Where("username = ?", u.GetUserName()).First(&dbUser)
+	db.Model(&models.User{}).Select("id").Where("username = ?", c.Param("user")).First(&dbUser)
 
+	var updateRequest UpdateRequest
+	c.BindJSON(&updateRequest)
 	collectionEntry := models.CollectionEntry {
 		UserID: dbUser.ID,
-		CardID: collectionRequest.CardID,
-		Quantity: collectionRequest.Quantity,
+		CardID: updateRequest.CardID,
+		Quantity: updateRequest.Quantity,
 	}
 
 	// This is kind of complicated so here's the explanation
@@ -175,6 +179,28 @@ func collectionEndpoint(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, collectionEntry)
+}
+
+func collectionPostEndpoint(c *gin.Context) {
+	authenticatedUser := auth.User(c.Request)
+	username := c.Param("user")
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	if authenticatedUser.GetUserName() != username {
+		c.JSON(http.StatusUnauthorized, unauthorizedResponse)
+		return
+	}
+
+	action := c.Param("action")
+	if action == "update" {
+		updateCollection(c)
+	} else {
+		errorMessage := fmt.Sprintf("Unknown action: %s", action)
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: errorMessage})
+	}
 }
 
 func tokenEndpoint(c *gin.Context) {
