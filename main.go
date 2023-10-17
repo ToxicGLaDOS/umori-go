@@ -38,6 +38,8 @@ var (
 	ErrUnknown error = errors.New("Unknown error")
 	ErrCreatingToken error = errors.New("Error creating token")
 	ErrInvalidJSON error = errors.New("Invalid JSON body")
+	ErrInvalidCredentials error = errors.New("Invalid credentials")
+	ErrMissingBasicAuth error = errors.New("Request missing BasicAuth")
 
 )
 func GetOffset(c *gin.Context) int {
@@ -274,9 +276,13 @@ func createToken(r *http.Request) (string, error) {
 // Only called if user isn't found in cacheObj
 func validateUser(ctx context.Context, r *http.Request, userName, password string) (auth.Info, error) {
 	var dbUser models.User
-	result := db.Select("PasswordHash").Where("username = ?", userName).First(&dbUser)
-	if result.Error != nil {
-		log.Fatal(result.Error)
+	err := db.Select("PasswordHash").Where("username = ?", userName).First(&dbUser).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrInvalidCredentials
+		} else {
+			return nil, ErrUnknown
+		}
 	}
 
 
@@ -305,21 +311,21 @@ func BasicAuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, err := basicStrategy.Authenticate(c.Request.Context(), c.Request)
 		if err != nil {
-			fmt.Printf("got error when authenticating: %s\n", err.Error())
 			if errors.Is(err, basic.ErrMissingPrams) {
 				errorResponse := ErrorResponse{
-					Message: "Request missing BasicAuth",
+					Message: ErrMissingBasicAuth.Error(),
 				}
 				c.AbortWithStatusJSON(http.StatusUnauthorized, errorResponse)
 			} else if errors.Is(err, basic.ErrInvalidCredentials) {
 				errorResponse := ErrorResponse{
-					Message: "Invalid credentials",
+					Message: ErrInvalidCredentials.Error(),
 				}
 				c.AbortWithStatusJSON(http.StatusUnauthorized, errorResponse)
 			} else {
 				errorResponse := ErrorResponse{
 					Message: err.Error(),
 				}
+				fmt.Printf("got error when authenticating: %s\n", err.Error())
 				c.AbortWithStatusJSON(http.StatusUnauthorized, errorResponse)
 			}
 

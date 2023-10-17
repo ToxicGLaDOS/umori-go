@@ -16,6 +16,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
+	"github.com/toxicglados/umori-go/pkg/crypto"
 	"github.com/toxicglados/umori-go/pkg/models"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -95,7 +96,8 @@ func TestRegisterTwice(t *testing.T) {
 	w := callEndpoint(`{"username": "test", "password": "hunter2"}`, "POST", "/api/register")
 	w = callEndpoint(`{"username": "test", "password": "hunter2"}`, "POST", "/api/register")
 
-	err := validateResponse(w, 400, ErrUserAlreadyExists.Error())
+	expectedError := ErrorResponse{Message: ErrUserAlreadyExists.Error()}
+	err := validateErrorResponse(w, 400, expectedError)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +106,8 @@ func TestRegisterTwice(t *testing.T) {
 func TestRegisterMissingPassword(t *testing.T) {
 	w := callEndpoint(`{"username": "test"}`, "POST", "/api/register")
 
-	err := validateResponse(w, 400, models.ErrMissingPassword.Error())
+	expectedError := ErrorResponse{Message: models.ErrMissingPassword.Error()}
+	err := validateErrorResponse(w, 400, expectedError)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +116,8 @@ func TestRegisterMissingPassword(t *testing.T) {
 func TestRegisterMissingUsername(t *testing.T) {
 	w := callEndpoint(`{"password": "hunter2"}`, "POST", "/api/register")
 
-	err := validateResponse(w, 400, models.ErrMissingUsername.Error())
+	expectedError := ErrorResponse{Message: models.ErrMissingUsername.Error()}
+	err := validateErrorResponse(w, 400, expectedError)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +126,8 @@ func TestRegisterMissingUsername(t *testing.T) {
 func TestRegisterEmptyBody(t *testing.T) {
 	w := callEndpoint("", "POST", "/api/register")
 
-	err := validateResponse(w, 400, ErrUnexpectedEOF.Error())
+	expectedError := ErrorResponse{Message: ErrUnexpectedEOF.Error()}
+	err := validateErrorResponse(w, 400, expectedError)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +137,8 @@ func TestRegisterMalformedData(t *testing.T) {
 	w := callEndpoint("{foobar}", "POST", "/api/register")
 
 	errorMessage := "invalid character 'f' looking for beginning of object key string"
-	err := validateResponse(w, 400, errorMessage)
+	expectedError := ErrorResponse{Message: errorMessage}
+	err := validateErrorResponse(w, 400, expectedError)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,11 +147,82 @@ func TestRegisterMalformedData(t *testing.T) {
 func TestRegisterIncorrectDataType(t *testing.T) {
 	w := callEndpoint("false", "POST", "/api/register")
 
-	err := validateResponse(w, 400, ErrInvalidJSON.Error())
+	expectedError := ErrorResponse{Message: ErrInvalidJSON.Error()}
+	err := validateErrorResponse(w, 400, expectedError)
 	if err != nil {
 		t.Fatal(err)
 	}
 }
+
+func TestTokenEndpoint(t *testing.T) {
+	passwordHash, err := crypto.GenerateFromPassword("hunter2", crypto.DefaultHashingParams())
+	if err != nil {
+		t.Fatalf("Couldn't hash password. Got error: \"%s\"", err)
+	}
+
+	mock.ExpectQuery(`^SELECT "password_hash" FROM "users" WHERE username = \$1 (.+)$`).WithArgs("test").WillReturnRows(sqlmock.NewRows([]string{"password_hash"}).AddRow(passwordHash))
+	w := callEndpointWithBasicAuth("", "GET", "/api/token", "test", "hunter2")
+
+	err = validateCode(w, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := struct{Token *string}{}
+	err = json.NewDecoder(w.Result().Body).Decode(&response)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if response.Token == nil {
+		log.Fatal("Response json didn't have the correct shape")
+	}
+}
+
+func TestTokenWithoutAuth(t *testing.T) {
+	w := callEndpoint("", "GET", "/api/token")
+
+	expectedError := ErrorResponse{Message: ErrMissingBasicAuth.Error()}
+	err := validateErrorResponse(w, 401, expectedError)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// This user is already stored in cache from an earlier test
+func TestTokenWithBadPassword(t *testing.T) {
+	w := callEndpointWithBasicAuth("", "GET", "/api/token", "test", "wrong_password")
+
+	expectedError := ErrorResponse{Message: ErrInvalidCredentials.Error()}
+	err := validateErrorResponse(w, 401, expectedError)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTokenWithNewUser(t *testing.T) {
+	mock.ExpectQuery(`^SELECT "password_hash" FROM "users" WHERE username = \$1 (.+)$`).WithArgs("test2").WillReturnRows(sqlmock.NewRows([]string{"password_hash"}))
+
+	w := callEndpointWithBasicAuth("", "GET", "/api/token", "test2", "hunter2")
+
+	expectedError := ErrorResponse{Message: ErrInvalidCredentials.Error()}
+	err := validateErrorResponse(w, 401, expectedError)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func callEndpointWithBasicAuth(payload, method, endpoint, username, password string) *httptest.ResponseRecorder {
+	bodyReader := bytes.NewReader([]byte(payload))
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(method, endpoint, bodyReader)
+	req.SetBasicAuth(username, password)
+	r.ServeHTTP(w, req)
+
+	return w
+}
+
 
 func callEndpoint(payload string, method string, endpoint string) *httptest.ResponseRecorder {
 	bodyReader := bytes.NewReader([]byte(payload))
@@ -157,20 +234,28 @@ func callEndpoint(payload string, method string, endpoint string) *httptest.Resp
 	return w
 }
 
-func validateResponse(w *httptest.ResponseRecorder, expectedCode int, expectedMessage string) error {
+func validateCode(w *httptest.ResponseRecorder, expectedCode int) error {
 	if w.Code != expectedCode {
 		errorMessage := fmt.Sprintf("Expected status code %d, got \"%d\"", expectedCode, w.Code)
 		return errors.New(errorMessage)
 	}
-	var errorResponse ErrorResponse
-	err := json.NewDecoder(w.Result().Body).Decode(&errorResponse)
+	return nil
+}
+
+func validateErrorResponse(w *httptest.ResponseRecorder, expectedCode int, expectedResponse interface{}) error {
+	err := validateCode(w, expectedCode)
 	if err != nil {
-		errorMessage := "Failed to decode JSON response"
-		return errors.New(errorMessage)
+		return err
 	}
 
-	if errorResponse.Message != expectedMessage {
-		errorMessage := fmt.Sprintf("Expected \"%s\" as response, got \"%s\"", expectedMessage, errorResponse.Message)
+	var response ErrorResponse
+	err = json.NewDecoder(w.Result().Body).Decode(&response)
+	if err != nil {
+		return err
+	}
+
+	if response != expectedResponse{
+		errorMessage := fmt.Sprintf("Expected \"%s\" as response, got \"%s\"", expectedResponse, response)
 		return errors.New(errorMessage)
 	}
 
