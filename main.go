@@ -111,39 +111,14 @@ func setupRouter() *gin.Engine {
 		// Token auth functions go here
 	}
 
-	r.GET("/api/cards/search", func(c *gin.Context) {
-		// nameContains is never empty because of the %%
-		// so even without a parameter we will search for everything
-		nameContains := fmt.Sprintf("%%%s%%", c.Query("nameContains"))
+	r.GET("/api/cards/search", searchEndpoint)
 
-		var count int64
-		var cards []models.Card
-		result := db.Model(&models.Card{}).
-		             Preload("Set").
-		             Preload("Finishes").
-		             Preload("Faces").
-		             Where("name ILIKE ?", nameContains).
-		             Order("name, id").
-		             Count(&count).
-		             Scopes(Paginate(c)).
-		             Find(&cards)
+	r.POST("/api/register", registerEndpoint)
 
-		if result.Error != nil {
-			log.Fatal(result.Error)
-		}
-		offset, exists := c.Get("offset")
-		if !exists {
-			log.Fatal(errors.New("Couldn't find offset in context"))
-		}
+	return r
+}
 
-		pagedSearchResult := SearchResult{
-			PagedResult: NewPagedResult(count, offset.(int64)),
-			Cards: cards,
-		}
-		c.JSON(http.StatusOK, pagedSearchResult)
-	})
-
-	r.POST("/api/register", func(c *gin.Context) {
+func registerEndpoint(c *gin.Context) {
 		var user models.User
 	
 		err := c.BindJSON(&user)
@@ -178,10 +153,39 @@ func setupRouter() *gin.Engine {
 		}
 
 		c.JSON(http.StatusOK, struct{}{})
-	})
+	}
 
-	return r
-}
+func searchEndpoint(c *gin.Context) {
+		// nameContains is never empty because of the %%
+		// so even without a parameter we will search for everything
+		nameContains := fmt.Sprintf("%%%s%%", c.Query("nameContains"))
+
+		var count int64
+		var cards []models.Card
+		result := db.Model(&models.Card{}).
+		             Preload("Set").
+		             Preload("Finishes").
+		             Preload("Faces").
+		             Where("name ILIKE ?", nameContains).
+		             Order("name, id").
+		             Count(&count).
+		             Scopes(Paginate(c)).
+		             Find(&cards)
+
+		if result.Error != nil {
+			log.Fatal(result.Error)
+		}
+		offset, exists := c.Get("offset")
+		if !exists {
+			log.Fatal(errors.New("Couldn't find offset in context"))
+		}
+
+		pagedSearchResult := SearchResult{
+			PagedResult: NewPagedResult(count, offset.(int64)),
+			Cards: cards,
+		}
+		c.JSON(http.StatusOK, pagedSearchResult)
+	}
 
 type UpdateRequest struct {
 	CardID uuid.UUID `json:"card_id"`
