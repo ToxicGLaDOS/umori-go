@@ -82,9 +82,9 @@ func main() {
 	elapsed = end.Sub(start)
 	fmt.Printf("Unmarshal all: %s\n", elapsed)
 
-	for _, card := range cards {
-		_, isDefault := defaultSet[card.ID.String()]
-		card.DefaultLang = isDefault
+	for i := range cards {
+		_, isDefault := defaultSet[cards[i].ID.String()]
+		cards[i].DefaultLang = isDefault
 	}
 
 	var dsn = "host=localhost user=postgres password=password dbname=postgres port=55432 TimeZone=America/Chicago"
