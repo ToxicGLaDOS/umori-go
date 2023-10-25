@@ -217,10 +217,20 @@ func searchEndpoint(c *gin.Context) {
 		// making it larger than any numeric one.
 		// lastly, if there are no numbers in the collector_number we just make it a large number
 		// Of course this happens after the other searches so it's rarely relevant
-		result = result.Order(`name, release_date desc, default_lang desc, CASE
-		WHEN collector_number ~ '^[0-9]+$' THEN cast(collector_number as int)
-		WHEN collector_number ~ '[0-9]+' THEN cast(substring(collector_number from '[0-9]+') as int) + 100000000
-		ELSE 100000000 END`).
+		result = result.Order("name").
+		                Order(`
+		                CASE
+		                  WHEN language = 'en' THEN 0
+		                  ELSE 1
+		                END`).
+		                Order("release_date desc").
+		                Order("default_lang desc").
+		                Order(`
+		                CASE
+		                  WHEN collector_number ~ '^[0-9]+$' THEN cast(collector_number as int)
+		                  WHEN collector_number ~ '[0-9]+' THEN cast(substring(collector_number from '[0-9]+') as int) + 100000000
+		                  ELSE 100000000
+		                END`).
 		                Scopes(Paginate(c)).
 		                Find(&cards)
 
