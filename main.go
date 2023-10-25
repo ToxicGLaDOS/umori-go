@@ -155,22 +155,74 @@ func registerEndpoint(c *gin.Context) {
 		c.JSON(http.StatusOK, struct{}{})
 	}
 
+func searchScope(nameContains string, defaultOnly, includeDigitalExclusive bool) func(db *gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		result := db.Model(&models.Card{}).
+		             Where("name ILIKE ?", nameContains)
+		if defaultOnly {
+			result = result.Where("default_lang = true")
+		}
+		if !includeDigitalExclusive {
+			result = result.Where("digital_exclusive = false")
+		}
+		return result
+	}
+}
+
 func searchEndpoint(c *gin.Context) {
 		// nameContains is never empty because of the %%
 		// so even without a parameter we will search for everything
 		nameContains := fmt.Sprintf("%%%s%%", c.Query("nameContains"))
+		defaultOnly := c.Query("defaultOnly") == "true"
+		collapsePrintings := c.Query("collapsePrintings") == "true"
+		includeDigitalExclusive := c.Query("includeDigitalExclusive") == "true"
 
+		// collapsePrintings implies defaultOnly
+		if collapsePrintings {
+			defaultOnly = true
+		}
+
+		// Get count for query
 		var count int64
-		var cards []models.Card
 		result := db.Model(&models.Card{}).
-		             Preload("Set").
-		             Preload("Finishes").
-		             Preload("Faces").
-		             Where("name ILIKE ?", nameContains).
-		             Order("name, id").
-		             Count(&count).
-		             Scopes(Paginate(c)).
-		             Find(&cards)
+		            Scopes(searchScope(nameContains, defaultOnly, includeDigitalExclusive))
+
+		if collapsePrintings {
+			result = result.Distinct("name")
+		}
+		err := result.Count(&count).
+		              Error
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Get rows for query
+		var cards []models.Card
+		result = db.Model(&models.Card{}).
+		            Preload("Set").
+		            Preload("Finishes").
+		            Preload("Faces").
+		            Scopes(searchScope(nameContains, defaultOnly, includeDigitalExclusive))
+
+		if collapsePrintings {
+			// This is a postgres exclusive trick
+			result = result.Select("DISTINCT ON (name) *")
+		}
+
+		// The collector_number sorting is a bit wild
+		// We check if it's a number and then cast it to a number
+		// if not, then we try to find a substring that's an number
+		// and cast that to a number and add a large number to
+		// preserve the order of non-numeric collector_numbers while still
+		// making it larger than any numeric one.
+		// lastly, if there are no numbers in the collector_number we just make it a large number
+		// Of course this happens after the other searches so it's rarely relevant
+		result = result.Order(`name, release_date desc, default_lang desc, CASE
+		WHEN collector_number ~ '^[0-9]+$' THEN cast(collector_number as int)
+		WHEN collector_number ~ '[0-9]+' THEN cast(substring(collector_number from '[0-9]+') as int) + 100000000
+		ELSE 100000000 END`).
+		                Scopes(Paginate(c)).
+		                Find(&cards)
 
 		if result.Error != nil {
 			log.Fatal(result.Error)
@@ -184,6 +236,7 @@ func searchEndpoint(c *gin.Context) {
 			PagedResult: NewPagedResult(count, offset.(int64)),
 			Cards: cards,
 		}
+		c.Header("Access-Control-Allow-Origin", "*")
 		c.JSON(http.StatusOK, pagedSearchResult)
 	}
 

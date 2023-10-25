@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/toxicglados/umori-go/pkg/crypto"
@@ -29,6 +30,10 @@ type Finish struct {
 	CardID uuid.UUID `json:"-"`
 }
 
+type ReleaseDate struct {
+	time.Time `gorm:"column:release_date"`
+}
+
 type Card struct {
 	gorm.Model `json:"-"`
 	ID uuid.UUID `json:"id" gorm:"type:uuid;primary_key"`
@@ -42,6 +47,9 @@ type Card struct {
 	Set Set `json:"set"`
 	Layout string `json:"layout"`
 	CollectorNumber string `json:"collector_number"`
+	ReleaseDate ReleaseDate `json:"released_at" gorm:"embedded"`
+	Language string `json:"lang"`
+	DigitalExclusive bool `json:"digital_exclusive"`
 }
 
 type Set struct {
@@ -86,6 +94,9 @@ type ScryfallCard struct {
 	SetCode string `json:"set"` // The (usually) 3 letter code
 	CollectorNumber string `json:"collector_number"`
 	Layout string `json:"layout"`
+	ReleaseDate ReleaseDate `json:"released_at"`
+	Language string `json:"lang"`
+	Digital bool `json:"digital"`
 }
 
 type CollectionEntry struct {
@@ -130,9 +141,22 @@ func(finishes Finishes) MarshalJSON() ([]byte, error) {
 	return json.Marshal(stringFinishes)
 }
 
+func(date *ReleaseDate) UnmarshalJSON(data []byte) error {
+	t, err := time.Parse(time.DateOnly, string(data[1:len(data)-1]))
+	if err != nil {
+		return err
+	}
+	date.Time = t
+
+	return nil
+}
+
 func(card *Card) UnmarshalJSON(data []byte) error {
 	var jsonCard ScryfallCard
-	json.Unmarshal(data, &jsonCard)
+	err := json.Unmarshal(data, &jsonCard)
+	if err != nil {
+		return err
+	}
 
 	var finishes []Finish
 	for _, finish := range jsonCard.Finishes {
@@ -146,6 +170,9 @@ func(card *Card) UnmarshalJSON(data []byte) error {
 	card.Faces = jsonCard.Faces
 	card.Layout = jsonCard.Layout
 	card.Finishes = finishes
+	card.Language = jsonCard.Language
+	card.ReleaseDate = jsonCard.ReleaseDate
+	card.DigitalExclusive = jsonCard.Digital
 	card.ImageURIs = ImageURIs{
 		Small: jsonCard.ImageURIs.Small,
 		Normal: jsonCard.ImageURIs.Normal,
