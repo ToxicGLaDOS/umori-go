@@ -72,11 +72,13 @@ type SearchResult struct {
 
 type PagedResult struct {
 	HasMore bool `json:"has_more"`
+	Total int64 `json:"total"`
 }
 
 func NewPagedResult(count, offset int64) PagedResult {
 	return PagedResult {
 		HasMore: count - (offset + pageSize) > 0,
+		Total: count,
 	}
 }
 
