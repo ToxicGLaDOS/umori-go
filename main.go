@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	pageSize = 25
+	pageSize = 30
 )
 
 var (
