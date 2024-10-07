@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	//"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	//"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -97,6 +97,7 @@ func setupRouter() *gin.Engine {
 	// gin.DisableConsoleColor()
 	r := gin.Default()
 
+
 	basicAuthorized := r.Group("/api")
 	basicAuthorized.Use(BasicAuthRequired())
 	{
@@ -114,30 +115,73 @@ func setupRouter() *gin.Engine {
 	r.GET("/api/cards/search", searchEndpoint)
 
 	r.POST("/api/register", registerEndpoint)
+	r.POST("/api/login", loginEndpoint)
 
 	return r
 }
 
-func registerEndpoint(c *gin.Context) {
-		var user models.User
-	
-		err := c.BindJSON(&user)
+func loginEndpoint(c *gin.Context) {
+	var form models.UnsafeUser
+	// This will infer what binder to use depending on the content-type header.
+	if err := c.ShouldBind(&form); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var user models.User
+	db.Model(&models.User{}).Select("PasswordHash").Where("username = ?", form.Username).First(&user)
+	match, err := crypto.ComparePasswordAndHash(*form.Password, user.PasswordHash)
+
+	if match {
+		c.JSON(http.StatusOK, gin.H{"status": "you are logged in"})
+		return
+	} else {
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrUnexpectedEOF.Error()})
-			} else {
-				var unmarshalTypeError *json.UnmarshalTypeError
-				var syntaxError *json.SyntaxError
-				if errors.As(err, &unmarshalTypeError) {
-					c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrInvalidJSON.Error()})
-				} else if errors.Is(err, models.ErrMissingPassword) || errors.Is(err, models.ErrMissingUsername) || errors.As(err, &syntaxError) {	
-					c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
-				} else {
-					c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrUnknown.Error()})
-				}
-			}
+			// TODO: Probably shouldn't return this error to the user directly, not sure what it includes
+			c.JSON(http.StatusUnauthorized, gin.H{"status": fmt.Sprintf("unauthorized: %s", err.Error())})
+		}
+		c.JSON(http.StatusUnauthorized, gin.H{"status": "unauthorized"})
+		return
+	} 
+	
+}
+
+func registerEndpoint(c *gin.Context) {
+		var unsafeUser models.UnsafeUser
+
+		err := c.ShouldBind(&unsafeUser)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		passwordHash, err := crypto.GenerateFromPassword(*unsafeUser.Password, crypto.DefaultHashingParams())
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
+		}
+
+		var user = models.User{
+			Username: *unsafeUser.Username,
+			PasswordHash: passwordHash,
+		}
+
+		//err := c.BindJSON(&user)
+		//if err != nil {
+		//	if errors.Is(err, io.EOF) {
+		//		c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrUnexpectedEOF.Error()})
+		//	} else {
+		//		var unmarshalTypeError *json.UnmarshalTypeError
+		//		var syntaxError *json.SyntaxError
+		//		if errors.As(err, &unmarshalTypeError) {
+		//			c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrInvalidJSON.Error()})
+		//		} else if errors.Is(err, models.ErrMissingPassword) || errors.Is(err, models.ErrMissingUsername) || errors.As(err, &syntaxError) {	
+		//			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		//		} else {
+		//			c.JSON(http.StatusBadRequest, ErrorResponse{Message: ErrUnknown.Error()})
+		//		}
+		//	}
+		//	return
+		//}
 
 		err = db.Create(&user).Error
 
