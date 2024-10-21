@@ -71,6 +71,11 @@ type PagedResult struct {
 	Total int64 `json:"total"`
 }
 
+type CollectionSearchResult struct {
+	PagedResult
+	Cards []models.CollectionEntry
+}
+
 func NewPagedResult(count, offset int64) PagedResult {
 	return PagedResult {
 		HasMore: count - (offset + pageSize) > 0,
@@ -96,6 +101,7 @@ func setupRouter() *gin.Engine {
 	{
 		tokenAuthorized.POST("/:user/collection/:action", collectionPostEndpoint)
 		tokenAuthorized.GET("/:user/collection/cards/:id", collectionGetCardsByID)
+		tokenAuthorized.GET("/:user/collection/cards", collectionGetCards)
 		tokenAuthorized.GET("/:user", userEndpoint)
 	}
 
@@ -142,7 +148,8 @@ func loginEndpoint(c *gin.Context) {
 			return
 		}
 
-		expirationTime := time.Now().Add(5 * time.Minute)
+		// TODO: Figure out a good value for this
+		expirationTime := time.Now().Add(120 * time.Minute)
 
 		claims := Claims{
 		    StandardClaims: jwt.StandardClaims{
@@ -233,8 +240,7 @@ func registerEndpoint(c *gin.Context) {
 
 func searchScope(nameContains string, defaultOnly, includeDigitalExclusive bool) func(db *gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
-		result := db.Model(&models.Card{}).
-		             Where("name ILIKE ?", nameContains)
+		result := db.Where("name ILIKE ?", nameContains)
 		if defaultOnly {
 			result = result.Where("default_lang = true")
 		}
@@ -364,6 +370,43 @@ func updateCollection(c *gin.Context) {
 	c.JSON(http.StatusOK, collectionEntry)
 }
 
+func collectionGetCards(c *gin.Context) {
+	fmt.Println("Collection get cards")
+	username := c.Param("user")
+	nameContains := fmt.Sprintf("%%%s%%", c.Query("nameContains"))
+	var collectionEntries []models.CollectionEntry
+	// Get count for query
+	var count int64
+	result := db.Model(&models.CollectionEntry{}).
+	            Joins("left join cards on card.id = collection_entries.card_id").
+		    Scopes(searchScope(nameContains, false, false))
+
+	result.Count(&count)
+
+	err := db.Model(&models.CollectionEntry{}).
+	          Joins("left join users on users.id = collection_entries.user_id").
+	          Where("username = ?", username).
+	          Scopes(Paginate(c)).
+	          Find(&collectionEntries).
+	          Error
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	offset, exists := c.Get("offset")
+	if !exists {
+		log.Fatal(errors.New("Couldn't find offset in context"))
+	}
+
+	pagedSearchResult := CollectionSearchResult{
+		PagedResult: NewPagedResult(count, offset.(int64)),
+		Cards: collectionEntries,
+	}
+
+	c.JSON(http.StatusOK, pagedSearchResult)
+}
+
 func collectionGetCardsByID(c *gin.Context) {
 	id := c.Param("id")
 	username := c.Param("user")
@@ -433,8 +476,9 @@ func TokenAuthRequired() gin.HandlerFunc {
 		claims, err := ParseToken(token)
 
 		if err != nil {
+			fmt.Printf(err.Error())
 			// TODO: Better error message
-			c.AbortWithStatusJSON(http.StatusUnprocessableEntity, ErrUnknown.Error())
+			c.AbortWithStatusJSON(http.StatusUnprocessableEntity, unauthorizedResponse)
 			return
 		}
 
