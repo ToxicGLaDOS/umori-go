@@ -102,7 +102,7 @@ type ScryfallCard struct {
 type CollectionEntry struct {
 	gorm.Model `json:"-"`
 	UserID uint `json:"-" gorm:"uniqueIndex:idx_user_card"`
-	CardID uuid.UUID `json:"card_id" gorm:"uniqueIndex:idx_user_card"`
+	CardID uuid.UUID `json:"card_id" gorm:"type:uuid;uniqueIndex:idx_user_card"`
 	Quantity int `json:"quantity"`
 }
 

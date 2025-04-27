@@ -73,7 +73,7 @@ type PagedResult struct {
 
 type CollectionSearchResult struct {
 	PagedResult
-	Cards []models.CollectionEntry
+	Cards []models.CollectionEntry `json:"cards"`
 }
 
 func NewPagedResult(count, offset int64) PagedResult {
@@ -401,18 +401,22 @@ func collectionGetCards(c *gin.Context) {
 	// Get count for query
 	var count int64
 	result := db.Model(&models.CollectionEntry{}).
-	            Joins("left join cards on card.id = collection_entries.card_id").
-		    Scopes(searchScope(nameContains, false, false))
+	             Joins("JOIN cards ON cards.id = collection_entries.card_id").
+	             Scopes(searchScope(nameContains, false, false))
 
 	result.Count(&count)
+	fmt.Println(count)
 
 	err := db.Model(&models.CollectionEntry{}).
-	          Joins("left join users on users.id = collection_entries.user_id").
+	          Joins("JOIN users ON users.id = collection_entries.user_id").
 	          Where("username = ?", username).
 	          Scopes(Paginate(c)).
 	          Find(&collectionEntries).
 	          Error
 
+	for _, entry := range collectionEntries {
+		fmt.Println(entry.CardID)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -425,6 +429,9 @@ func collectionGetCards(c *gin.Context) {
 	pagedSearchResult := CollectionSearchResult{
 		PagedResult: NewPagedResult(count, offset.(int64)),
 		Cards: collectionEntries,
+	}
+	for _, entry := range pagedSearchResult.Cards {
+		fmt.Println(entry.CardID)
 	}
 
 	c.JSON(http.StatusOK, pagedSearchResult)
