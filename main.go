@@ -106,6 +106,7 @@ func setupRouter() *gin.Engine {
 	}
 
 	r.GET("/api/cards/search", searchEndpoint)
+	r.GET("/api/cards/langs", langsEndpoint)
 
 	r.POST("/api/register", registerEndpoint)
 	r.POST("/api/login", loginEndpoint)
@@ -331,6 +332,28 @@ func searchEndpoint(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.JSON(http.StatusOK, pagedSearchResult)
 	}
+
+func langsEndpoint(c *gin.Context) {
+	set := c.Query("set")
+	collector_number := c.Query("cn")
+
+	var languages []string
+        // select language, sets.code from cards join sets ON sets.id = cards.set_id where sets.code = 'mh2' and collector_number = '267';
+	db.Model(&models.Card{}).
+	         Preload("Set").
+	         Select("language").
+	         Joins("JOIN sets ON sets.id = cards.set_id").
+	         Order(`
+	         CASE
+	           WHEN language = 'en' THEN 0
+	           ELSE 1
+	         END, language ASC`).
+	         Where("sets.code = ?", set).
+	         Where("collector_number = ?", collector_number).
+	         Find(&languages)
+
+	c.JSON(http.StatusOK, languages)
+}
 
 type UpdateRequest struct {
 	CardID uuid.UUID `json:"card_id"`
